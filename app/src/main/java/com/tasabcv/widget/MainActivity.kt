@@ -16,7 +16,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.RadioGroup
-import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
@@ -89,16 +88,6 @@ class MainActivity : Activity(), CoroutineScope by MainScope() {
             val text = result.text.toString().substringAfter(" ") // drop the "Bs."/"$"/"€" prefix
             cm.setPrimaryClip(ClipData.newPlainText("Tasa BCV", text))
             Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
-        }
-
-        val creditSwitch = findViewById<Switch>(R.id.show_credit)
-        val appCredit = findViewById<TextView>(R.id.credit)
-        creditSwitch.isChecked = AppSettings.showCredit(this)
-        appCredit.visibility = if (creditSwitch.isChecked) android.view.View.VISIBLE else android.view.View.GONE
-        creditSwitch.setOnCheckedChangeListener { _, on ->
-            AppSettings.setShowCredit(this, on)
-            appCredit.visibility = if (on) android.view.View.VISIBLE else android.view.View.GONE
-            RateWidgetProvider.refreshAll(this, error = false) // redraw widgets right away
         }
 
         findViewById<Button>(R.id.btn_refresh).setOnClickListener { refresh() }

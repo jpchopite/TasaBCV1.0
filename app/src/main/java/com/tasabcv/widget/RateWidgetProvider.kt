@@ -131,7 +131,6 @@ class RateWidgetProvider : AppWidgetProvider() {
                 )
             } else ctx.getString(R.string.updating)
             v.setTextViewText(R.id.checked, footer)
-            v.setViewVisibility(R.id.credit, if (AppSettings.showCredit(ctx)) View.VISIBLE else View.GONE)
 
             val refresh = PendingIntent.getBroadcast(
                 ctx, 0,

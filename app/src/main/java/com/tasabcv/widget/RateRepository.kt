@@ -108,14 +108,3 @@ object RateRepository {
         return Snapshot(rate("usd"), rate("eur"), prev("usd"), prev("eur"), p.getLong("last_check", 0))
     }
 }
-
-/** User settings (separate from the rate cache). */
-object AppSettings {
-    private fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
-
-    fun showCredit(ctx: Context): Boolean = prefs(ctx).getBoolean("show_credit", true)
-
-    fun setShowCredit(ctx: Context, show: Boolean) {
-        prefs(ctx).edit().putBoolean("show_credit", show).apply()
-    }
-}

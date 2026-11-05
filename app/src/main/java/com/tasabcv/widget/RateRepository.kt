@@ -10,7 +10,8 @@ import java.time.OffsetDateTime
 /** One official BCV rate: bolívares per unit of foreign currency. */
 data class Rate(val value: Double, val date: LocalDate)
 
-data class Rates(val usd: Rate, val eur: Rate)
+/** `eur` is null when no source gave a believable euro; the last good one is kept. */
+data class Rates(val usd: Rate, val eur: Rate?)
 
 /** What the widget shows: today's rates, the previous ones (for the change arrow) and when we last checked. */
 data class Snapshot(
@@ -30,9 +31,12 @@ object RateRepository {
     /** Fetches from DolarApi (which mirrors BCV); falls back to reading bcv.org.ve directly. */
     fun fetch(): Rates {
         // DolarApi misreads BCV's thousands dot ("1.006,03" -> 1.006), so reject pairs where EUR and USD disagree wildly.
-        val first = runCatching { fetchDolarApi().also { require(plausible(it.eur.value, it.usd.value)) { "DolarApi: EUR/USD inverosímil" } } }
-        if (first.isSuccess) return first.getOrThrow()
+        val first = runCatching { fetchDolarApi() }
+        val api = first.getOrNull()
+        if (api?.eur != null && plausible(api.eur.value, api.usd.value)) return api
         return runCatching { fetchBcv() }.getOrElse { e ->
+            // BCV unreachable: still update the dollar, and leave the euro as it was.
+            if (api != null) return api.copy(eur = null)
             throw Exception("No se pudo obtener la tasa", first.exceptionOrNull() ?: e)
         }
     }
@@ -99,7 +103,7 @@ object RateRepository {
             e.putString("${key}_date", r.date.toString())
         }
         store("usd", rates.usd)
-        store("eur", rates.eur)
+        rates.eur?.let { store("eur", it) }
         e.putLong("last_check", System.currentTimeMillis())
         e.apply()
     }
@@ -111,6 +115,9 @@ object RateRepository {
             return Rate(p.getFloat("${key}_value", 0f).toDouble(), LocalDate.parse(d))
         }
         fun prev(key: String) = p.getFloat("${key}_prev", 0f).toDouble().takeIf { it > 0 }
-        return Snapshot(rate("usd"), rate("eur"), prev("usd"), prev("eur"), p.getLong("last_check", 0))
+        val usd = rate("usd")
+        // Hides a bad euro saved by older versions (1.006 instead of 1.006,03) until a good one arrives.
+        val eur = rate("eur")?.takeIf { usd == null || plausible(it.value, usd.value) }
+        return Snapshot(usd, eur, prev("usd"), prev("eur"), p.getLong("last_check", 0))
     }
 }

@@ -10,7 +10,8 @@ import java.time.OffsetDateTime
 /** One official BCV rate: bolívares per unit of foreign currency. */
 data class Rate(val value: Double, val date: LocalDate)
 
-data class Rates(val usd: Rate, val eur: Rate)
+/** `eur` is null when no source gave a believable euro; the last good one is kept. */
+data class Rates(val usd: Rate, val eur: Rate?)
 
 /** What the widget shows: today's rates, the previous ones (for the change arrow) and when we last checked. */
 data class Snapshot(
@@ -29,12 +30,19 @@ object RateRepository {
 
     /** Fetches from DolarApi (which mirrors BCV); falls back to reading bcv.org.ve directly. */
     fun fetch(): Rates {
+        // DolarApi misreads BCV's thousands dot ("1.006,03" -> 1.006), so reject pairs where EUR and USD disagree wildly.
         val first = runCatching { fetchDolarApi() }
-        if (first.isSuccess) return first.getOrThrow()
+        val api = first.getOrNull()
+        if (api?.eur != null && plausible(api.eur.value, api.usd.value)) return api
         return runCatching { fetchBcv() }.getOrElse { e ->
+            // BCV unreachable: still update the dollar, and leave the euro as it was.
+            if (api != null) return api.copy(eur = null)
             throw Exception("No se pudo obtener la tasa", first.exceptionOrNull() ?: e)
         }
     }
+
+    /** EUR and USD stay within a factor of two of each other; anything else is a parsing error. */
+    private fun plausible(a: Double, b: Double) = a > 0 && b > 0 && a / b in 0.5..2.0
 
     private fun fetchDolarApi(): Rates {
         fun parse(json: String): Rate {
@@ -50,13 +58,14 @@ object RateRepository {
     private fun fetchBcv(): Rates {
         val html = get(BCV_HOME)
         fun rateFor(id: String): Double {
-            val m = Regex("""id="$id"[\s\S]*?<strong>\s*([\d.,]+)\s*</strong>""").find(html)
+            val m = Regex("""id="$id"[\s\S]*?<strong[^>]*>\s*([\d.,]+)\s*</strong>""").find(html)
                 ?: error("BCV: $id no encontrado")
             // BCV writes "39,18130000" (comma decimal).
             return m.groupValues[1].replace(".", "").replace(",", ".").toDouble()
         }
-        val dateStr = Regex("""date-display-single"[^>]*content="(\d{4}-\d{2}-\d{2})""").find(html)
-            ?.groupValues?.get(1)
+        // The attribute order varies between page versions, so take the content of whichever tag has the class.
+        val dateStr = Regex("""<span[^>]*date-display-single[^>]*>""").find(html)?.value
+            ?.let { Regex("""content="(\d{4}-\d{2}-\d{2})""").find(it)?.groupValues?.get(1) }
         val date = dateStr?.let { LocalDate.parse(it) } ?: LocalDate.now()
         return Rates(Rate(rateFor("dolar"), date), Rate(rateFor("euro"), date))
     }
@@ -86,14 +95,15 @@ object RateRepository {
             val oldDate = p.getString("${key}_date", null)?.let(LocalDate::parse)
             val oldValue = p.getFloat("${key}_value", 0f).toDouble()
             // New publication date -> remember the previous rate for the change indicator.
-            if (oldDate != null && r.date.isAfter(oldDate) && oldValue > 0) {
+            // A bad cached value (e.g. the old 1.006 euro) must not become the "previous" rate.
+            if (oldDate != null && r.date.isAfter(oldDate) && plausible(oldValue, r.value)) {
                 e.putFloat("${key}_prev", oldValue.toFloat())
             }
             e.putFloat("${key}_value", r.value.toFloat())
             e.putString("${key}_date", r.date.toString())
         }
         store("usd", rates.usd)
-        store("eur", rates.eur)
+        rates.eur?.let { store("eur", it) }
         e.putLong("last_check", System.currentTimeMillis())
         e.apply()
     }
@@ -105,6 +115,9 @@ object RateRepository {
             return Rate(p.getFloat("${key}_value", 0f).toDouble(), LocalDate.parse(d))
         }
         fun prev(key: String) = p.getFloat("${key}_prev", 0f).toDouble().takeIf { it > 0 }
-        return Snapshot(rate("usd"), rate("eur"), prev("usd"), prev("eur"), p.getLong("last_check", 0))
+        val usd = rate("usd")
+        // Hides a bad euro saved by older versions (1.006 instead of 1.006,03) until a good one arrives.
+        val eur = rate("eur")?.takeIf { usd == null || plausible(it.value, usd.value) }
+        return Snapshot(usd, eur, prev("usd"), prev("eur"), p.getLong("last_check", 0))
     }
 }
